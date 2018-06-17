@@ -5,12 +5,15 @@ source /etc/environment
 
 DEBIAN_FRONTEND=noninteractive apt-get -qq update
 
-# TODO as for loop
-if ! [[ -e /usr/bin/curl ]];
-then
-  echo "Install curl"
-  DEBIAN_FRONTEND=noninteractive apt-get install -qq -y curl vim
-fi
+apt-get -qq update
+for tool in "jq" "curl" "vim";
+do
+  if [[ $(dpkg-query -W -f='${Status}' ${tool} 2>/dev/null | grep -c "ok installed") -eq 0 ]];
+  then
+    echo "Installing ${tool}"
+    apt-get -qq install -y ${tool}
+  fi
+done
 
 ## Move stuff into place
 if ! [[ -e /usr/local/bin/matchbox ]];
@@ -399,12 +402,7 @@ EOF
   systemctl restart dnsmasq-coreos
 fi
 
-# TODO automate this step!
 echo 1 > /proc/sys/net/ipv4/ip_forward
-
-# /etc/sysctl.conf --> net.ipv4.ip_forward = 1
-# cat /proc/net/ip_conntrack
-
 iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 iptables -A FORWARD -i eth0 -o eth2 -m state --state RELATED,ESTABLISHED -j ACCEPT
 iptables -A FORWARD -i eth2 -o eth0 -j ACCEPT

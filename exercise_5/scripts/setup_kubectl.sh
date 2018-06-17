@@ -44,9 +44,6 @@ curl  --fail \
 jq -r .data.issuing_ca ${RAW_VAULT_ANSWER_FILE} > ca.pem
 jq -r .data.certificate ${RAW_VAULT_ANSWER_FILE} > crt.pem
 jq -r .data.private_key ${RAW_VAULT_ANSWER_FILE} > key.pem
-## TODO pack thse into the kubeconfig !!
-
-
 echo 'Succesfully fetched x509 certificate for cluster'
 
 # Configure kubectl

@@ -7,8 +7,7 @@ source /etc/environment
 # dev mode, thus we make the container never restart,
 # which means it will get recreated together with
 # its config if its not up
-# TODO fix warnings --> 0.10.2
-# TODO port-forward?
+# TODO update & fix warnings --> 0.10.2
 POLICYDIR=/tmp/vault_policies
 mkdir -p $POLICYDIR
 if [[ $(docker ps -a -q --filter name=vault | wc -l) -eq 0 ]];
@@ -26,8 +25,6 @@ then
   docker exec vault vault auth-enable -path=/inovex/approle approle
   docker exec vault vault mount -path=/inovex/k8s/global generic
   docker exec vault vault write /inovex/k8s/global/fluffy-unicorn-ka/all/cmdb user=root pass=rootpw
-  # TODO add here capabilities to read service account key
-  # TODO make use of --> fluffy-unicorn-ka
   docker exec vault \
     sh -c 'echo '"'"'path "/inovex/k8s/global/fluffy-unicorn-ka/master/*" { capabilities=["read"] }'"'"'|vault policy-write fluffy-unicorn-ka_read_master -'
 
@@ -83,7 +80,6 @@ then
                 allow_ip_sans='true' \
                 generate_lease='true'
 
-  # TODO as environment
   docker exec vault \
     vault write /inovex/fluffy-unicorn-ka-etcd/roles/etcd \
                 allowed_domains="${ZONE}" \

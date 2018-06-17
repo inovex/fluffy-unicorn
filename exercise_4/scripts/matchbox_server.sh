@@ -401,10 +401,6 @@ EOF
 fi
 
 echo 1 > /proc/sys/net/ipv4/ip_forward
-
-# /etc/sysctl.conf --> net.ipv4.ip_forward = 1
-# cat /proc/net/ip_conntrack
-
 iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 iptables -A FORWARD -i eth0 -o eth2 -m state --state RELATED,ESTABLISHED -j ACCEPT
 iptables -A FORWARD -i eth2 -o eth0 -j ACCEPT
