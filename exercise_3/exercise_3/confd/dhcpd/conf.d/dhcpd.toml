@@ -1,5 +1,0 @@
-[template]
-src = "dhcp.tmpl"
-dest =  "/etc/dhcp/dhcpd.conf"
-keys = ["/"]
-reload_cmd = "systemctl --no-block restart isc-dhcp-server.service"

@@ -51,7 +51,6 @@ EOF
     systemctl daemon-reload
     useradd -U matchbox
     mkdir -p /var/lib/matchbox/assets
-    mkdir -p /var/lib/matchbox/assets/zeus
     chown -R matchbox:matchbox /var/lib/matchbox
 
     curl -sLO https://raw.githubusercontent.com/coreos/matchbox/948bdee1658757413726ab8dcdb8e5e18e59bee5/scripts/get-coreos

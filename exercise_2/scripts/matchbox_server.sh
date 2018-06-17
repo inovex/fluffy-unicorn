@@ -51,7 +51,6 @@ EOF
   systemctl daemon-reload
   useradd -U matchbox
   mkdir -p /var/lib/matchbox/assets
-  mkdir -p /var/lib/matchbox/assets/zeus
   chown -R matchbox:matchbox /var/lib/matchbox
   curl -sLO https://raw.githubusercontent.com/coreos/matchbox/948bdee1658757413726ab8dcdb8e5e18e59bee5/scripts/get-coreos
   chmod +x ./get-coreos
@@ -281,7 +280,7 @@ fi
 if ! [[ -e /etc/dhcp/dhcpd.conf ]]; then
   DEBIAN_FRONTEND=noninteractive apt-get install -qq -y isc-dhcp-server
   systemctl enable isc-dhcp-server.service
-  
+
   sed -i 's/^INTERFACES=.*$/INTERFACES="eth2"/' /etc/default/isc-dhcp-server
  # Deploy hdd boot ipxe
  cat <<EOF >/var/lib/matchbox/assets/hdd.ipxe
