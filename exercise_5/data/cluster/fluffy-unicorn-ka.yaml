@@ -1,0 +1,57 @@
+---
+inovex:
+  k8s:
+    clusters:
+      fluffy-unicorn-ka:
+        defaults:
+          kubernetes_version: "1.10.3"
+          etcd_version: "3.2.13"
+          etcd_sha_512: "07b6021c258d72530b9b35e2be113af31a46f7d754ac19fb70f68a6d860d1f8c763746f312e1e5f64c118d117a0c51ace0f1ea0935f274a85784da954a4ddd47"
+          consul_template_version: "0.19.4"
+          consul_template_sha_512: "428b482b6b5380ee620d7d5d3cef63a305590326e23cc6cd79a2b2e0c95d9585dc22b5279ccea94414fcef24bea2f681c6a2d2e9c671c0039fcfbb6f0ec0e305"
+          container_linux_version: "1745.7.0"
+          vault_url: "http://192.168.0.254:8200"
+          cert_ttl: "8h"
+          kubernetes_domain: cluster.local
+          dns_service_address: 100.72.0.10
+          matchbox_endpoint: http://192.168.0.254:8080
+          api_server_ha_address: "apiservers"
+          api_server_vip_address: "192.168.0.254"
+          api_service_ip: 100.72.0.1
+          api_server_port: "443"
+          name: fluffy-unicorn-ka
+          cluster_domain: "fluffy"
+          install_disk: "/dev/sda"
+          pod_cidr: "100.64.0.0/13"
+          service_cidr: "100.72.0.0/16"
+          master_eviction: "memory.available<100Mi"
+          node_eviction: "memory.available<100Mi"
+          master_kube_reserved: "cpu=100m,memory=128Mi"
+          master_sys_reserved: "cpu=100m,memory=128Mi"
+          node_kube_reserved: "cpu=100m,memory=128Mi"
+          node_sys_reserved: "cpu=100m,memory=128Mi"
+          mtu: 1274
+          # Disable vault tls
+          # Don't do this in  production :)
+          vault_tls_enabled: false
+          addons:
+            calico:
+              version: "v2.6"
+            kube_dns:
+              version: "1.14.7"
+            rbac_defaults:
+              version: "0.1"
+            node_exporter:
+              version: "v0.14.0"
+            kube-proxy:
+              version: "1.8"
+            prometheus:
+              version: "v1.8"
+            fluentd:
+              version: "v0.2.2"
+            kube-state-metrics:
+              version: "v1.1.0"
+            ssl-file-exporter:
+              version: "0.0.7"
+            pod-security-policies:
+              version: "v0.0.1"

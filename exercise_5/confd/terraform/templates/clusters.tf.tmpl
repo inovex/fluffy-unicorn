@@ -1,0 +1,57 @@
+{{ range $cluster := lsdir "/clusters" }}
+module "{{ $cluster }}" {
+  source = "./modules/kubernetes"
+
+  matchbox_http_endpoint        = "{{- getv (printf "/clusters/%s/defaults/matchbox_endpoint" $cluster) "NOT_FOUND_IN_STORE" -}}"
+  container_linux_version       = "{{- getv (printf "/clusters/%s/defaults/container_linux_version" $cluster) "NOT_FOUND_IN_STORE" -}}"
+  container_linux_channel       = "stable" //TODO K/V store
+  kubernetes_version            = "{{- getv (printf "/clusters/%s/defaults/kubernetes_version" $cluster) "NOT_FOUND_IN_STORE" -}}"
+  etcd_version                  = "{{- getv (printf "/clusters/%s/defaults/etcd_version" $cluster) "NOT_FOUND_IN_STORE" -}}"
+  etcd_sha512                   = "{{- getv (printf "/clusters/%s/defaults/etcd_sha_512" $cluster) "NOT_FOUND_IN_STORE" -}}"
+  consultemplate_version        = "{{- getv (printf "/clusters/%s/defaults/consul_template_version" $cluster) "NOT_FOUND_IN_STORE" -}}"
+  consultemplate_sha512         = "{{- getv (printf "/clusters/%s/defaults/consul_template_sha_512" $cluster) "NOT_FOUND_IN_STORE" -}}"
+  install_disk                  = "{{- getv (printf "/clusters/%s/defaults/install_disk" $cluster) "NOT_FOUND_IN_STORE" -}}"
+
+  cluster_name                  = "{{ $cluster }}"
+  {{$nodes := lsdir (printf "/clusters/%s/nodes/master" $cluster)}}
+  controller_names              = ["{{join $nodes "\",\""}}"]
+  {{$macs := getvs (printf "/clusters/%s/nodes/master/*/mac" $cluster)}}
+  controller_macs               = ["{{join $macs "\",\""}}"]
+  {{$ips := getvs (printf "/clusters/%s/nodes/master/*/ip_address" $cluster)}}
+  controller_ips               = ["{{join $ips "\",\""}}"]
+  {{$nodes := lsdir (printf "/clusters/%s/nodes/worker" $cluster)}}
+  worker_names                  = ["{{join $nodes "\",\""}}"]
+  {{$macs := getvs (printf "/clusters/%s/nodes/worker/*/mac" $cluster)}}
+  worker_macs                   = ["{{join $macs "\",\""}}"]
+
+  cluster_domain                = "{{- getv (printf "/clusters/%s/defaults/cluster_domain" $cluster) "NOT_FOUND_IN_STORE" -}}"
+  k8s_domain_name               = "{{- getv (printf "/clusters/%s/defaults/kubernetes_domain" $cluster) "NOT_FOUND_IN_STORE" -}}"
+  pod_cidr                      = "{{- getv (printf "/clusters/%s/defaults/pod_cidr" $cluster) "NOT_FOUND_IN_STORE" -}}"
+  service_cidr                  = "{{- getv (printf "/clusters/%s/defaults/service_cidr" $cluster) "NOT_FOUND_IN_STORE" -}}"
+  kube_dns_service_ip           = "{{- getv (printf "/clusters/%s/defaults/dns_service_address" $cluster) "NOT_FOUND_IN_STORE" -}}"
+  api_server_ha_address         = "{{- getv (printf "/clusters/%s/defaults/api_server_ha_address" $cluster) "NOT_FOUND_IN_STORE" -}}"
+  api_server_vip_address        = "{{- getv (printf "/clusters/%s/defaults/api_server_vip_address" $cluster) "NOT_FOUND_IN_STORE" -}}"
+  api_server_port               = "{{- getv (printf "/clusters/%s/defaults/api_server_port" $cluster) "443" -}}"
+
+  api_service_ip                = "{{- getv (printf "/clusters/%s/defaults/api_service_ip" $cluster) "NOT_FOUND_IN_STORE" -}}"
+
+  master_eviction               = "{{- getv (printf "/clusters/%s/defaults/master_eviction" $cluster) "memory.available<1Gi,nodefs.available<10%" -}}"
+  master_kube_reserved          = "{{- getv (printf "/clusters/%s/defaults/master_kube_reserved" $cluster) "cpu=1000m,memory=1Gi" -}}"
+  master_sys_reserved           = "{{- getv (printf "/clusters/%s/defaults/master_sys_reserved" $cluster) "cpu=1000m,memory=1Gi" -}}"
+
+  node_eviction                 = "{{- getv (printf "/clusters/%s/defaults/node_eviction" $cluster) "memory.available<1Gi,nodefs.available<10%" -}}"
+  # Todo Add storage limit cpu=1000m,memory=1Gi,storage=10Gi. Currently the 1.8.1 kublet does not start with storage served.
+  node_kube_reserved            = "{{- getv (printf "/clusters/%s/defaults/node_kube_reserved" $cluster) "cpu=1000m,memory=1Gi" -}}"
+  node_sys_reserved             = "{{- getv (printf "/clusters/%s/defaults/node_sys_reserved" $cluster) "cpu=1000m,memory=1Gi" -}}"
+
+  cmdb_url                      = "{{- getenv "ETCD_NODES" }}"
+
+  vault_url                     = "{{- getv (printf "/clusters/%s/defaults/vault_url" $cluster) "NOT_FOUND_IN_STORE" -}}"
+  vault_tls_enabled             = "{{- getv (printf "/clusters/%s/defaults/vault_tls_enabled" $cluster) "true" -}}"
+  vault_approle_id_master       = "{{- getv (printf "/clusters/%s/defaults/master_app_role_id" $cluster) "NOT_FOUND_IN_STORE" -}}"
+  vault_approle_id_worker       = "{{- getv (printf "/clusters/%s/defaults/worker_app_role_id" $cluster) "NOT_FOUND_IN_STORE" -}}"
+
+  mtu                           = "{{- getv (printf "/clusters/%s/defaults/mtu" $cluster) "1500" }}"
+  cert_ttl                      = "{{- getv (printf "/clusters/%s/defaults/cert_ttl" $cluster) "NOT_FOUND_IN_STORE" }}"
+}
+{{ end }}

@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    k8s-app: "kube-proxy"
+    version: "1.10.3"
+  name: kube-proxy
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      k8s-app: kube-proxy
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 10%
+  template:
+    metadata:
+      labels:
+        k8s-app: "kube-proxy"
+        version: "1.10.3"
+      annotations:
+        scheduler.alpha.kubernetes.io/critical-pod: ''
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: '10249'
+    spec:
+      priorityClassName: "SYSTEM"
+      terminationGracePeriodSeconds: 15
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          effect: NoSchedule
+        - key: "CriticalAddonsOnly"
+          operator: "Exists"
+      hostNetwork: true
+      containers:
+      - name: kube-proxy
+        image: quay.io/coreos/hyperkube:v1.10.3_coreos.0
+        resources:
+          requests:
+            memory: 100Mi
+            cpu: "100m"
+          limits:
+            memory: 100Mi
+            cpu: "100m"
+        command: ["/usr/local/bin/kube-proxy"]
+        args:
+        - --config=/etc/k8s/kube-proxy.config
+        - --v=2
+        securityContext:
+          privileged: true
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 10256
+          initialDelaySeconds: 3
+          periodSeconds: 3
+        volumeMounts:
+        - mountPath: /var/log
+          name: varlog
+          readOnly: false
+        - mountPath: /run/xtables.lock
+          name: xtables-lock
+          readOnly: false
+        - mountPath: /lib/modules
+          name: lib-modules
+          readOnly: true
+        - name: kube-proxy-config
+          mountPath: /etc/k8s
+      volumes:
+      - name: varlog
+        hostPath:
+          path: /var/log
+      - name: xtables-lock
+        hostPath:
+          path: /run/xtables.lock
+          type: FileOrCreate
+      - name: lib-modules
+        hostPath:
+          path: /lib/modules
+      - name: kube-proxy-config
+        configMap:
+          name: kube-proxy-config
+      serviceAccountName: kube-proxy

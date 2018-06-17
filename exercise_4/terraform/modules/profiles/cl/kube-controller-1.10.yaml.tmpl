@@ -1,0 +1,1294 @@
+---
+systemd:
+  units:
+    - name: sshd.service
+      enable: true
+    - name: sshd.socket
+      mask: false
+    - name: locksmithd.service
+      mask: true
+    - name: container.slice
+      enable: true
+      contents: |
+        [Unit]
+        Description=Limited resources slice for containers
+        Documentation=man:systemd.special(7)
+        DefaultDependencies=no
+        Before=slices.target
+        Requires=-.slice
+        After=-.slice
+    - name: kube.slice
+      enable: true
+      contents: |
+        [Unit]
+        Description=Limited resources slice for Kubernetes services
+        Documentation=man:systemd.special(7)
+        DefaultDependencies=no
+        Before=slices.target
+        Requires=-.slice
+        After=-.slice
+    - name: docker.service
+      enable: true
+    - name: update-ca-certificates.path
+      enable: true
+      contents: |
+        [Path]
+        PathChanged=/etc/ssl/certs
+        [Install]
+        WantedBy=multi-user.target
+    # Required for consul-template to be able to know
+    # the hostname to request the correct certificates
+    - name: write-hostname.service
+      enable: true
+      contents: |
+        [Service]
+        ExecStart={{.write_hostname_scriptlocation}}
+        Type=oneshot
+        RemainAfterExit=yes
+    - name: write-hostname.timer
+      enable: true
+      contents: |
+        [Timer]
+        OnCalendar=*:0/15
+        [Install]
+        WantedBy=multi-user.target
+    - name: label-node.service
+      enable: true
+      contents: |
+        [Unit]
+        After=consul-template.service
+        [Service]
+        ExecStart={{.label_node_scriptlocation}}
+        Type=oneshot
+        [Install]
+        WantedBy=multi-user.target
+    - name: check-deploy.service
+      enable: true
+      contents: |
+        [Unit]
+        After=consul-template.service
+        Requires=consul-template.service
+        [Service]
+        EnvironmentFile={{.consultemplate_cmdbcreds_rendered}}
+        EnvironmentFile={{.node_env_file}}
+        ExecStart={{.check_deploy_scriptlocation}}
+        Restart=always
+        RestartSec=5
+        [Install]
+        WantedBy=multi-user.target
+    - name: rocket-cleanup.service
+      contents: |
+        [Service]
+        ExecStart=/opt/bin/rocket-cleanup.sh
+        Type=oneshot
+    - name: check-debug.service
+      enable: true
+      contents: |
+        [Unit]
+        After=consul-template.service
+        Requires=consul-template.service
+        [Service]
+        EnvironmentFile={{.consultemplate_cmdbcreds_rendered}}
+        EnvironmentFile={{.node_env_file}}
+        ExecStart={{.check_debug_scriptlocation}}
+        Restart=always
+        RestartSec=5
+        [Install]
+        WantedBy=multi-user.target
+    - name: failure-domain-loader.service
+      contents: |
+        [Unit]
+        After=consul-template.service
+        [Service]
+        EnvironmentFile={{.consultemplate_cmdbcreds_rendered}}
+        EnvironmentFile={{.node_env_file}}
+        ExecStart={{.write_failure_domain_scriptlocation}}
+        Type=oneshot
+        RemainAfterExit=yes
+    - name: failure-domain-loader.timer
+      enable: true
+      contents: |
+        [Unit]
+        After=consul-template.service
+        [Timer]
+        OnCalendar=*:*:0/10
+        [Install]
+        WantedBy=multi-user.target
+    - name: fetch_keys.service
+      contents: |
+        [Service]
+        Type=oneshot
+        ExecStart=/opt/bin/fetch_keys.sh
+    - name: consul-template.service
+      enable: true
+      contents: |
+        [Unit]
+        After=network-online.target write-hostname.service
+        Requires=network-online.target write-hostname.service
+        [Service]
+        KillSignal=SIGINT
+        EnvironmentFile=-{{.consultemplate_vault_token_file}}
+        # Required to get the hostname which in turn is required
+        # to request the correct certificates
+        EnvironmentFile=/etc/environment
+        ExecStartPre=/opt/bin/vault_token_fetcher
+        ExecStart=/opt/bin/consul-template \
+          -config={{.consultemplate_config}}
+
+        Restart=always
+        RestartSec=5
+        [Install]
+        WantedBy=multi-user.target
+    - name: etcd.service
+      enable: true
+      contents: |
+        [Unit]
+        Description=etcd
+        Documentation=https://github.com/coreos/etcd
+        After=network-online.target consul-template.service
+        Requires=network-online.target consul-template.service
+
+        [Service]
+        Slice=kube.slice
+        EnvironmentFile=/etc/environment
+        EnvironmentFile={{.consultemplate_cmdbcreds_rendered}}
+        EnvironmentFile={{.node_env_file}}
+        ExecStart=/opt/bin/start_etcd.sh
+        Type=notify
+        Restart=always
+        RestartSec=5
+        LimitNOFILE=65536
+        TimeoutStartSec=0
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: kube-apiserver.service
+      enable: true
+      contents: |
+        [Unit]
+        Description=Kubernetes API Server
+        Documentation=https://kubernetes.io/docs/admin/kube-apiserver/
+        After=network-online.target consul-template.service
+        Requires=network-online.target consul-template.service
+
+        [Service]
+        LimitNOFILE=65536
+        Slice=kube.slice
+        # wait for certificates from consul-template
+        ExecStartPre=/usr/bin/bash -c \
+          'until [[ -e {{.etcd_cafile}} ]] && [[ -e {{.etcd_crtfile}} ]] && [[ -e {{.etcd_keyfile}} ]] && \
+                 [[ -e {{.k8s_cafile}} ]] && [[ -e {{.api_crtfile}} ]] && [[ -e {{.api_keyfile}} ]]; do \
+            sleep 10; \
+          done'
+        ExecStart=/opt/bin/kube-apiserver \
+          --allow-privileged=true \
+          --anonymous-auth=false \
+          --apiserver-count={{.k8s_api_server_count}} \
+          --audit-log-maxage=30 \
+          --audit-log-maxbackup=10 \
+          --audit-log-maxsize=200 \
+          --audit-log-path=/var/log/audit/audit.log \
+          --audit-policy-file=/etc/kubernetes/audit-policy.yaml \
+          --authorization-mode=Node,RBAC \
+          --bind-address=0.0.0.0 \
+          --client-ca-file={{.k8s_cafile}} \
+          --enable-swagger-ui=false \
+          --enable-admission-plugins=NamespaceLifecycle,LimitRanger,ServiceAccount,DefaultStorageClass,DefaultTolerationSeconds,MutatingAdmissionWebhook,ValidatingAdmissionWebhook,ResourceQuota,NodeRestriction \
+          --endpoint-reconciler-type=lease \
+          --etcd-cafile={{.etcd_cafile}} \
+          --etcd-certfile={{.etcd_crtfile}} \
+          --etcd-keyfile={{.etcd_keyfile}} \
+          --etcd-servers={{.etcd_cluster}} \
+          --event-ttl=1h \
+          --kubelet-certificate-authority={{.k8s_cafile}} \
+          --kubelet-client-certificate={{.api_crtfile}} \
+          --kubelet-client-key={{.api_keyfile}} \
+          --kubelet-https=true \
+          --runtime-config=rbac.authorization.k8s.io/v1beta1 \
+          --secure-port={{.k8s_api_server_port}} \
+          --service-account-key-file={{.k8s_service_account_private_key}} \
+          --service-account-lookup \
+          --service-cluster-ip-range={{.k8s_service_cidr}} \
+          --service-node-port-range=30000-32767 \
+          --storage-backend=etcd3 \
+          --target-ram-mb=8192 \
+          --tls-cert-file={{.api_crtfile}} \
+          --tls-private-key-file={{.api_keyfile}}
+        Restart=always
+        RestartSec=5
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: kube-scheduler.service
+      enable: true
+      contents: |
+        [Unit]
+        Description=Kubernetes Scheduler
+        Documentation=https://kubernetes.io/docs/admin/kube-scheduler/
+        After=network-online.target
+        Requires=network-online.target
+
+        [Service]
+        LimitNOFILE=65536
+        Slice=kube.slice
+        # TODO : WARNING: all flags other than --config are deprecated. Please begin using a config file ASAP
+        ExecStart=/opt/bin/kube-scheduler \
+          --kubeconfig={{.k8s_scheduler_kubeconfig}}
+        Restart=always
+        RestartSec=5
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: kube-controller-manager.service
+      enable: true
+      contents: |
+        [Unit]
+        Description=Kubernetes Controller Manager
+        Documentation=https://kubernetes.io/docs/admin/kube-controller-manager/
+        After=network-online.target
+        Requires=network-online.target
+
+        [Service]
+        LimitNOFILE=65536
+        Slice=kube.slice
+        ExecStart=/opt/bin/kube-controller-manager \
+          --allocate-node-cidrs=true \
+          --cluster-cidr={{.k8s_pod_cidr}} \
+          --cluster-name={{.cluster_name}} \
+          --enable-dynamic-provisioning \
+          --leader-elect=true \
+          --kubeconfig={{.k8s_controller_manager_kubeconfig}} \
+          --root-ca-file={{.k8s_cafile}} \
+          --use-service-account-credentials=true \
+          --service-account-private-key-file={{.k8s_service_account_private_key}} \
+          --service-cluster-ip-range={{.k8s_service_cidr}}
+        Restart=always
+        RestartSec=5
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: kubelet.service
+      enable: true
+      contents: |
+        [Unit]
+        After=haproxy-configwriter.service failure-domain-loader.service
+        Requires=haproxy-configwriter.service
+        OnFailure=rocket-cleanup.service
+        [Service]
+        Delegate=yes
+        Slice=kube.slice
+        LimitNOFILE=65536
+        EnvironmentFile=/etc/kubernetes/kubelet.env
+        EnvironmentFile=/etc/failure_domain.env
+        Environment="RKT_RUN_ARGS=--uuid-file-save=/var/run/kubelet-pod.uuid \
+          --volume=resolv,kind=host,source=/etc/resolv.conf \
+          --mount volume=resolv,target=/etc/resolv.conf \
+          --volume var-lib-cni,kind=host,source=/var/lib/cni \
+          --mount volume=var-lib-cni,target=/var/lib/cni \
+          --volume opt-cni,kind=host,source=/opt/cni/bin \
+          --mount volume=opt-cni,target=/opt/cni/bin \
+          --volume etc-cni,kind=host,source=/etc/cni/net.d \
+          --mount volume=etc-cni,target=/etc/cni/net.d \
+          --volume kube-config,kind=host,source={{.kubelet_kubeconfig}} \
+          --mount volume=kube-config,target={{.kubelet_kubeconfig}} \
+          --volume kube-certs,kind=host,source={{.k8s_base_dir}} \
+          --mount volume=kube-certs,target={{.k8s_base_dir}} \
+          --volume var-log,kind=host,source=/var/log \
+          --mount volume=var-log,target=/var/log \
+          --volume etc-kubernetes-manifests,kind=host,source=/etc/kubernetes/manifests \
+          --mount volume=etc-kubernetes-manifests,target=/etc/kubernetes/manifests \
+          --insecure-options=image"
+        ExecStartPre=/bin/mkdir -p /var/lib/node_exporter
+        ExecStartPre=/bin/mkdir -p /etc/kubernetes/manifests
+        ExecStartPre=/bin/mkdir -p /etc/kubernetes/checkpoint-secrets
+        ExecStartPre=/bin/mkdir -p /etc/kubernetes/inactive-manifests
+        ExecStartPre=/bin/mkdir -p /var/lib/cni
+        ExecStartPre=/bin/mkdir -p /opt/cni/bin
+        ExecStartPre=/bin/mkdir -p /etc/cni/net.d
+        ExecStartPre=/bin/mkdir -p {{.k8s_base_dir}}
+        ExecStart=/usr/lib/coreos/kubelet-wrapper \
+          --allow-privileged \
+          --config=/etc/k8s/kubelet.config \
+          --container-runtime=docker \
+          --kubeconfig={{.kubelet_kubeconfig}} \
+          --cni-conf-dir=/etc/cni/net.d \
+          --network-plugin=cni \
+          --node-labels=kubernetes.io/role=master,failure-domain.beta.kubernetes.io/rack=${RACK},failure-domain.beta.kubernetes.io/zone=${ZONE},debug=false,gitref.k8s.zone/commitid=${GITREF} \
+          --pod-infra-container-image={{.infra_pod}}
+        ExecStopPost=-/usr/bin/rkt stop --uuid-file=/var/run/kubelet-pod.uuid
+        ExecStopPost=-/usr/bin/rkt rm --uuid-file=/var/run/kubelet-pod.uuid
+        Restart=always
+        RestartSec=10
+        [Install]
+        WantedBy=multi-user.target
+    - name: haproxy-configwriter.service
+      enable: true
+      contents: |
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart={{.haproxy_configwriter_scriptlocation}}
+    - name: slice-initalizer.service
+      enable: true
+      contents: |
+        [Unit]
+        Description=This service is needed for the container slice
+        After=docker.service
+        Requires=docker.service
+
+        [Service]
+        Slice=container.slice
+        ExecStartPre=-/usr/bin/docker rm -f slice-initalizer
+        ExecStart=/usr/bin/docker run --name=slice-initalizer -i {{.infra_pod}}
+        Restart=always
+        RestartSec=5
+        [Install]
+        WantedBy=multi-user.target
+storage:
+  files:
+    - path: /etc/k8s/kubelet.config
+      filesystem: root
+      mode: 0644
+      contents:
+        inline: |
+          kind: KubeletConfiguration
+          apiVersion: kubelet.config.k8s.io/v1beta1
+          authentication:
+            x509:
+              clientCAFile: "{{.k8s_cafile}}"
+            anonymous:
+              enabled: False
+          clusterDomain: "{{.k8s_domain_name}}"
+          clusterDNS:
+            - "{{.k8s_dns_service_ip}}"
+          cgroupsPerQOS: True
+          cgroupDriver: "cgroupfs"
+          cgroupRoot: "/container.slice"
+          serializeImagePulls: False
+          KubeReserved:
+            cpu: "100m"
+            memory: "128Mi"
+          KubeReservedCgroup: "/kube.slice"
+          SystemReserved:
+            cpu: "100m"
+            memory: "128Mi"
+          SystemReservedCgroup: "/system.slice"
+          TLSCertFile: "{{.kubelet_crtfile}}"
+          TLSPrivateKeyFile: "{{.kubelet_keyfile}}"
+          evictionHard:
+            memory.available:  "128Mi"
+          StaticPodPath: "/etc/kubernetes/manifests/"
+    - path: /etc/kubernetes/kubelet.env
+      filesystem: root
+      mode: 0644
+      contents:
+        inline: |
+          KUBELET_IMAGE_TAG=v{{.kubernetes_version}}_coreos.0
+    - path: /opt/bin/etcd
+      filesystem: root
+      mode: 0755
+      contents:
+        remote:
+          url: {{.assets_host}}/etcd/etcd-{{.etcd_version}}
+    - path: /opt/bin/etcdctl
+      filesystem: root
+      mode: 0755
+      contents:
+        remote:
+          url: {{.assets_host}}/etcd/etcdctl-{{.etcd_version}}
+    - path: {{.consultemplate_config}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+         vault {
+           address = "{{.vault_url}}"
+            ssl {
+              enabled = {{.vault_tls_enabled}}
+            }
+          }
+         template {
+           source = "{{.consultemplate_cmdbcreds_template}}"
+           destination = "{{.consultemplate_cmdbcreds_rendered}}"
+           perms = 0600
+           # Required to not have matchbox interpolate
+           left_delimiter  = "[["
+           right_delimiter = "]]"
+         }
+         template {
+           source = "{{.consultemplate_etcd_catemplate}}"
+           destination = "{{.etcd_cafile}}"
+           command = "/usr/bin/systemctl restart --no-block etcd.service"
+           # Required to not have matchbox interpolate
+           left_delimiter  = "[["
+           right_delimiter = "]]"
+         }
+         template {
+           source = "{{.consultemplate_etcd_crttemplate}}"
+           destination = "{{.etcd_crtfile}}"
+           command = "/usr/bin/systemctl restart --no-block etcd.service kube-apiserver.service"
+           # Required to not have matchbox interpolate
+           left_delimiter  = "[["
+           right_delimiter = "]]"
+         }
+         template {
+           source = "{{.consultemplate_etcd_keytemplate}}"
+           destination = "{{.etcd_keyfile}}"
+           perms = 0600
+           command = "/usr/bin/systemctl restart --no-block etcd.service kube-apiserver.service"
+           # Required to not have matchbox interpolate
+           left_delimiter  = "[["
+           right_delimiter = "]]"
+         }
+         template {
+           source = "{{.consultemplate_k8s_catemplate}}"
+           destination = "{{.k8s_cafile}}"
+           command = "/usr/bin/systemctl restart --no-block kube-apiserver.service kube-controller-manager.service kube-scheduler.service kubelet.service"
+           # Required to not have matchbox interpolate
+           left_delimiter  = "[["
+           right_delimiter = "]]"
+         }
+         template {
+           source = "{{.consultemplate_api_crttemplate}}"
+           destination = "{{.api_crtfile}}"
+           command = "/usr/bin/systemctl restart --no-block kube-apiserver.service"
+           # Required to not have matchbox interpolate
+           left_delimiter  = "[["
+           right_delimiter = "]]"
+         }
+         template {
+           source = "{{.consultemplate_api_keytemplate}}"
+           destination = "{{.api_keyfile}}"
+           command = "/usr/bin/systemctl restart --no-block kube-apiserver.service"
+           perms = 0600
+           # Required to not have matchbox interpolate
+           left_delimiter  = "[["
+           right_delimiter = "]]"
+         }
+         template {
+           source = "{{.consultemplate_controllerm_crttemplate}}"
+           destination = "{{.controllerm_crtfile}}"
+           command = "/usr/bin/systemctl restart --no-block kube-controller-manager.service"
+           # Required to not have matchbox interpolate
+           left_delimiter  = "[["
+           right_delimiter = "]]"
+         }
+         template {
+           source = "{{.consultemplate_controllerm_keytemplate}}"
+           destination = "{{.controllerm_keyfile}}"
+           command = "/usr/bin/systemctl restart --no-block kube-controller-manager.service"
+           perms = 0600
+           # Required to not have matchbox interpolate
+           left_delimiter  = "[["
+           right_delimiter = "]]"
+         }
+         template {
+           source = "{{.consultemplate_scheduler_crttemplate}}"
+           destination = "{{.scheduler_crtfile}}"
+           command = "/usr/bin/systemctl restart --no-block kube-scheduler.service"
+           # Required to not have matchbox interpolate
+           left_delimiter  = "[["
+           right_delimiter = "]]"
+         }
+         template {
+           source = "{{.consultemplate_scheduler_keytemplate}}"
+           destination = "{{.scheduler_keyfile}}"
+           command = "/usr/bin/systemctl restart --no-block kube-scheduler.service"
+           perms = 0600
+           # Required to not have matchbox interpolate
+           left_delimiter  = "[["
+           right_delimiter = "]]"
+         }
+         template {
+           source = "{{.consultemplate_kubelet_crttemplate}}"
+           destination = "{{.kubelet_crtfile}}"
+           command = "/usr/bin/systemctl restart --no-block kubelet.service"
+           # Required to not have matchbox interpolate
+           left_delimiter  = "[["
+           right_delimiter = "]]"
+         }
+         template {
+           source = "{{.consultemplate_kubelet_keytemplate}}"
+           destination = "{{.kubelet_keyfile}}"
+           command = "/usr/bin/systemctl restart --no-block kubelet.service"
+           perms = 0600
+           # Required to not have matchbox interpolate
+           left_delimiter  = "[["
+           right_delimiter = "]]"
+         }
+         template {
+           source = "{{.consultemplate_sa_keytemplate}}"
+           destination = "{{.k8s_service_account_private_key}}"
+           command = "/usr/bin/systemctl restart --no-block kube-apiserver.service"
+           perms = 0600
+           # Required to not have matchbox interpolate
+           left_delimiter  = "[["
+           right_delimiter = "]]"
+         }
+    - path: {{.consultemplate_cmdbcreds_template}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          [[- with secret "/inovex/k8s/global/{{.cluster_name}}/all/cmdb" -]]
+          CMDB_USER='[[ .Data.user ]]'
+          CMDB_PASS='[[ .Data.pass ]]'[[ end ]]
+    - path: {{.consultemplate_sa_keytemplate}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          [[- with secret " inovex/k8s/global/{{.cluster_name}}/master/sa_sign_key" -]]
+          [[ .Data.service_account_key ]][[ end ]]
+    - path: {{.consultemplate_etcd_catemplate}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          [[- $hostname := env "HOSTNAME" -]]
+          [[- $hostip := env "HOSTIP" -]]
+          [[- $cn_arg := printf "common_name=%s.%s" $hostname "{{.domain}}" -]]
+          [[- $ip_arg := printf "ip_sans=127.0.0.1,%s" $hostip -]]
+          [[- with secret "/inovex/{{.cluster_name}}-etcd/issue/etcd" $cn_arg $ip_arg -]]
+          [[ .Data.issuing_ca ]][[ end ]]
+    - path: {{.consultemplate_etcd_crttemplate}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          [[- $hostname := env "HOSTNAME" -]]
+          [[- $hostip := env "HOSTIP" -]]
+          [[- $cn_arg := printf "common_name=%s.%s" $hostname "{{.domain}}" -]]
+          [[- $ip_arg := printf "ip_sans=127.0.0.1,%s" $hostip -]]
+          [[- $ttl_arg := printf "ttl=%s" "{{.cert_ttl}}" -]]
+          [[- with secret "/inovex/{{.cluster_name}}-etcd/issue/etcd" $cn_arg $ip_arg $ttl_arg -]]
+          [[ .Data.certificate ]][[ end ]]
+    - path: {{.consultemplate_etcd_keytemplate}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          [[- $hostname := env "HOSTNAME" -]]
+          [[- $hostip := env "HOSTIP" -]]
+          [[- $cn_arg := printf "common_name=%s.%s" $hostname "{{.domain}}" -]]
+          [[- $ip_arg := printf "ip_sans=127.0.0.1,%s" $hostip -]]
+          [[- $ttl_arg := printf "ttl=%s" "{{.cert_ttl}}" -]]
+          [[- with secret "/inovex/{{.cluster_name}}-etcd/issue/etcd" $cn_arg $ip_arg $ttl_arg -]]
+          [[ .Data.private_key ]][[ end ]]
+    - path: {{.consultemplate_k8s_catemplate}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          [[- $hostname := env "HOSTNAME" -]]
+          [[- $hostip := env "HOSTIP" -]]
+          [[- $cn_arg := printf "common_name=%s.%s" $hostname "{{.domain}}" -]]
+          [[- $san_arg := printf "alt_names={{.k8s_api_server_ha_address}}.{{.domain}},{{.k8s_api_server_ha_address}},kubernetes.default" -]]
+          [[- $ip_sans_arg := printf "ip_sans=127.0.0.1,{{.k8s_api_service_ip}},{{.k8s_api_server_vip_address}},%s" $hostip -]]
+          [[- $ttl_arg := printf "ttl=%s" "{{.cert_ttl}}" -]]
+          [[- with secret "/inovex/{{.cluster_name}}-k8s/issue/master" $cn_arg $san_arg $ip_sans_arg $ttl_arg -]]
+          [[ .Data.issuing_ca ]][[ end ]]
+    - path: {{.consultemplate_api_crttemplate}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          [[- $hostname := env "HOSTNAME" -]]
+          [[- $hostip := env "HOSTIP" -]]
+          [[- $cn_arg := printf "common_name=%s.%s" $hostname "{{.domain}}" -]]
+          [[- $san_arg := printf "alt_names={{.k8s_api_server_ha_address}}.{{.domain}},{{.k8s_api_server_ha_address}},kubernetes.default" -]]
+          [[- $ip_sans_arg := printf "ip_sans=127.0.0.1,{{.k8s_api_service_ip}},{{.k8s_api_server_vip_address}},%s" $hostip -]]
+          [[- $ttl_arg := printf "ttl=%s" "{{.cert_ttl}}" -]]
+          [[- with secret "/inovex/{{.cluster_name}}-k8s/issue/master" $cn_arg $san_arg $ip_sans_arg $ttl_arg -]]
+          [[ .Data.certificate ]][[ end ]]
+    - path: {{.consultemplate_api_keytemplate}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          [[- $hostname := env "HOSTNAME" -]]
+          [[- $hostip := env "HOSTIP" -]]
+          [[- $cn_arg := printf "common_name=%s.%s" $hostname "{{.domain}}" -]]
+          [[- $san_arg := printf "alt_names={{.k8s_api_server_ha_address}}.{{.domain}},{{.k8s_api_server_ha_address}},kubernetes.default" -]]
+          [[- $ip_sans_arg := printf "ip_sans=127.0.0.1,{{.k8s_api_service_ip}},{{.k8s_api_server_vip_address}},%s" $hostip -]]
+          [[- $ttl_arg := printf "ttl=%s" "{{.cert_ttl}}" -]]
+          [[- with secret "/inovex/{{.cluster_name}}-k8s/issue/master" $cn_arg $san_arg $ip_sans_arg $ttl_arg -]]
+          [[ .Data.private_key ]][[ end ]]
+    - path: {{.consultemplate_controllerm_crttemplate}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          [[- $hostname := env "HOSTNAME" -]]
+          [[- $hostip := env "HOSTIP" -]]
+          [[- $cn_arg := printf "common_name=system:kube-controller-manager" -]]
+          [[- $san_arg := printf "alt_names=%s.{{.domain}},%s" $hostname $hostname -]]
+          [[- $ip_arg := printf "ip_sans=127.0.0.1,%s" $hostip -]]
+          [[- $ttl_arg := printf "ttl=%s" "{{.cert_ttl}}" -]]
+          [[- with secret "/inovex/{{.cluster_name}}-k8s/issue/master" $cn_arg $san_arg $ip_arg $ttl_arg -]]
+          [[ .Data.certificate ]][[ end ]]
+    - path: {{.consultemplate_controllerm_keytemplate}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          [[- $hostname := env "HOSTNAME" -]]
+          [[- $hostip := env "HOSTIP" -]]
+          [[- $cn_arg := printf "common_name=system:kube-controller-manager" -]]
+          [[- $san_arg := printf "alt_names=%s.{{.domain}},%s" $hostname $hostname -]]
+          [[- $ip_arg := printf "ip_sans=127.0.0.1,%s" $hostip -]]
+          [[- $ttl_arg := printf "ttl=%s" "{{.cert_ttl}}" -]]
+          [[- with secret "/inovex/{{.cluster_name}}-k8s/issue/master" $cn_arg $san_arg $ip_arg $ttl_arg -]]
+          [[ .Data.private_key ]][[ end ]]
+    - path: {{.consultemplate_scheduler_crttemplate}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          [[- $hostname := env "HOSTNAME" -]]
+          [[- $hostip := env "HOSTIP" -]]
+          [[- $cn_arg := printf "common_name=system:kube-scheduler" -]]
+          [[- $san_arg := printf "alt_names=%s.{{.domain}},%s" $hostname $hostname -]]
+          [[- $ip_arg := printf "ip_sans=127.0.0.1,%s" $hostip -]]
+          [[- $ttl_arg := printf "ttl=%s" "{{.cert_ttl}}" -]]
+          [[- with secret "/inovex/{{.cluster_name}}-k8s/issue/master" $cn_arg $san_arg $ip_arg $ttl_arg -]]
+          [[ .Data.certificate ]][[ end ]]
+    - path: {{.consultemplate_scheduler_keytemplate}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          [[- $hostname := env "HOSTNAME" -]]
+          [[- $hostip := env "HOSTIP" -]]
+          [[- $cn_arg := printf "common_name=system:kube-scheduler" -]]
+          [[- $san_arg := printf "alt_names=%s.{{.domain}},%s" $hostname $hostname -]]
+          [[- $ip_arg := printf "ip_sans=127.0.0.1,%s" $hostip -]]
+          [[- $ttl_arg := printf "ttl=%s" "{{.cert_ttl}}" -]]
+          [[- with secret "/inovex/{{.cluster_name}}-k8s/issue/master" $cn_arg $san_arg $ip_arg $ttl_arg -]]
+          [[ .Data.private_key ]][[ end ]]
+    - path: {{.consultemplate_kubelet_crttemplate}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          [[- $hostname := env "HOSTNAME" -]]
+          [[- $hostip := env "HOSTIP" -]]
+          [[- $cn_arg := printf "common_name=system:node:%s" $hostname -]]
+          [[- $san_arg := printf "alt_names=%s.{{.domain}},%s" $hostname $hostname -]]
+          [[- $ip_arg := printf "ip_sans=127.0.0.1,%s" $hostip -]]
+          [[- $ttl_arg := printf "ttl=%s" "{{.cert_ttl}}" -]]
+          [[- with secret "/inovex/{{.cluster_name}}-k8s/issue/kubelet" $cn_arg $san_arg $ip_arg $ttl_arg -]]
+          [[ .Data.certificate ]][[ end ]]
+    - path: {{.consultemplate_kubelet_keytemplate}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          [[- $hostname := env "HOSTNAME" -]]
+          [[- $hostip := env "HOSTIP" -]]
+          [[- $cn_arg := printf "common_name=system:node:%s" $hostname -]]
+          [[- $san_arg := printf "alt_names=%s.{{.domain}},%s" $hostname $hostname -]]
+          [[- $ip_arg := printf "ip_sans=127.0.0.1,%s" $hostip -]]
+          [[- $ttl_arg := printf "ttl=%s" "{{.cert_ttl}}" -]]
+          [[- with secret "/inovex/{{.cluster_name}}-k8s/issue/kubelet" $cn_arg $san_arg $ip_arg $ttl_arg -]]
+          [[ .Data.private_key ]][[ end ]]
+    - path: /opt/bin/kube-apiserver
+      filesystem: root
+      mode: 0755
+      contents:
+        remote:
+          url: {{.assets_host}}/k8s/kube-apiserver-{{.kubernetes_version}}
+    - path: /opt/bin/kube-controller-manager
+      filesystem: root
+      mode: 0755
+      contents:
+        remote:
+          url: {{.assets_host}}/k8s/kube-controller-manager-{{.kubernetes_version}}
+    - path: /opt/bin/kube-scheduler
+      filesystem: root
+      mode: 0755
+      contents:
+        remote:
+          url: {{.assets_host}}/k8s/kube-scheduler-{{.kubernetes_version}}
+    - path: /opt/bin/kubectl
+      filesystem: root
+      mode: 0755
+      contents:
+        remote:
+          url: {{.assets_host}}/k8s/kubectl-{{.kubernetes_version}}
+    - path: /opt/bin/vault_token_fetcher
+      filesystem: root
+      mode: 0700
+      user:
+        id: 0
+      contents:
+        inline: |
+          #!/usr/bin/env bash
+          set -e
+          TOKEN=$(curl -Ss {{.vault_url}}/v1/auth/inovex/approle/login \
+            -XPOST --data "{\"role_id\": \"{{.vault_approle_id}}\"}" \
+              |jq -r .auth.client_token)
+
+          mkdir -p $(dirname {{.consultemplate_vault_token_file}})
+          # Ensure file exists, so the ch{own,mod} doesn't fail
+          touch {{.consultemplate_vault_token_file}}
+          # This is pretty sensitive, so ensure owner and permissions
+          chown root {{.consultemplate_vault_token_file}}
+          chmod 0600 {{.consultemplate_vault_token_file}}
+          echo "VAULT_TOKEN=$TOKEN" > {{.consultemplate_vault_token_file}}
+    - path: {{.write_hostname_scriptlocation}}
+      filesystem: root
+      mode: 0755
+      contents:
+        inline: |
+          #!/usr/bin/env bash
+
+          set -eu
+          # Block until host got hostname via dhcp and ip
+          # network-online.target is not sufficient
+          # for that
+          until [[ "$(hostname)" != 'localhost' ]]; do sleep 1; done
+          until networkctl status  \
+            $(ip r s|grep default|awk '{print $5}') |grep '  Address'|awk '{print $2}' \
+            |grep '.'; do sleep 1; done
+
+          HOSTNAME=$(hostname)
+
+          # Wait until IPv4 address is there
+          until networkctl status $(ip r s|grep default|awk '{print $5}') \
+             | grep '  Address'|awk '{print $2}' \
+             | grep '^[0-9]\{1,3\}.[0-9]\{1,3\}.[0-9]\{1,3\}.[0-9]\{1,3\}'; do sleep 1; done
+
+          HOSTIP=$(networkctl status $(ip r s|grep default|awk '{print $5}') |grep '  Address'|awk '{print $2}')
+
+          TMP=$(mktemp)
+          echo $HOSTNAME > "$TMP"
+          mv "$TMP" /etc/hostname
+          echo "HOSTNAME=$HOSTNAME" > "$TMP"
+          echo "HOSTIP=$HOSTIP" >> "$TMP"
+          mv "$TMP" /etc/environment
+    - path: {{.node_env_file}}
+      filesystem: root
+      mode: 0755
+      contents:
+        inline: |
+          NODEROLE=master
+          CLUSTERNAME={{.cluster_name}}
+    - path: {{.label_node_scriptlocation}}
+      filesystem: root
+      mode: 0755
+      contents:
+        inline: |
+          #!/usr/bin/env bash
+          until [[ -e /etc/k8s/ca.pem ]] && [[ -e /etc/k8s/kubelet_crt.pem ]] && [[ -e /etc/k8s/kubelet_key.pem ]]; do
+            sleep 10
+          done
+          until
+            curl -s --fail -k -XPATCH \
+              --cacert /etc/k8s/ca.pem \
+              --cert /etc/k8s/kubelet_crt.pem \
+              --key /etc/k8s/kubelet_key.pem \
+              -H "Accept: application/json, /" \
+              -H "Content-Type: application/strategic-merge-patch+json" \
+              https://127.0.0.1:11000/api/v1/nodes/$(hostname) \
+              --data '{"metadata":{"labels":{"gitref.k8s.zone/commitid":"{{.git_reference}}"}}}'; do
+            sleep 10
+          done
+    - path: {{.write_failure_domain_scriptlocation}}
+      filesystem: root
+      mode: 0755
+      contents:
+        inline: |
+          #!/usr/bin/env bash
+
+          set -eu
+          if [[ -e /etc/failure_domain.env ]]; then
+             systemctl stop failure-domain-loader.timer
+             exit 0
+          fi
+
+          ZONE=$(echo $CLUSTERNAME | awk -F- '{print $3}')
+          RACK=$(ETCDCTL_API=2 etcdctl \
+            --endpoints={{.cmdb_url}} \
+            --username=$CMDB_USER:$CMDB_PASS \
+            get /inovex/k8s/clusters/$CLUSTERNAME/nodes/$NODEROLE/$(hostname)/rack_id)
+
+          TMP=$(mktemp)
+          echo "ZONE=$ZONE" > "$TMP"
+          echo "RACK=$RACK" >> "$TMP"
+          echo "GITREF={{.git_reference}}" >> "$TMP"
+          mv "$TMP" /etc/failure_domain.env
+    - path: {{.check_debug_scriptlocation}}
+      filesystem: root
+      mode: 0700
+      contents:
+        inline: |
+          #!/usr/bin/env bash
+          set -eu
+          # Ensure we didn't missed anything
+          /opt/bin/start_debug.sh $(ETCDCTL_API=2 etcdctl \
+            --endpoints={{.cmdb_url}} \
+            --username=$CMDB_USER:$CMDB_PASS \
+            get \
+            /inovex/k8s/clusters/$CLUSTERNAME/nodes/$NODEROLE/$(hostname)/debug)
+
+          ETCDCTL_API=2 etcdctl \
+            --endpoints={{.cmdb_url}} \
+            --username=$CMDB_USER:$CMDB_PASS \
+            exec-watch \
+            /inovex/k8s/clusters/$CLUSTERNAME/nodes/$NODEROLE/$(hostname)/debug -- bash -c '/opt/bin/start_debug.sh ${ETCD_WATCH_VALUE}'
+    - path: /opt/bin/start_debug.sh
+      filesystem: root
+      mode: 0700
+      contents:
+        inline: |
+          #!/usr/bin/env bash
+          set -eux
+          IS_DEBUG=$1
+          echo "Update the debug flag to $IS_DEBUG"
+          if [[ ${IS_DEBUG} != 'true' ]];
+          then
+            exit 0
+          fi
+
+          echo "{\"metadata\":{\"labels\":{\"debug\":\"${IS_DEBUG}\"}}}" > /etc/debug.json
+          # Add the debug label to the node e.g. debug=true
+          curl -k -v -XPATCH \
+          --cacert /etc/k8s/ca.pem \
+          --cert /etc/k8s/kubelet_crt.pem \
+          --key /etc/k8s/kubelet_key.pem \
+          -H "Accept: application/json, /" \
+          -H "Content-Type: application/strategic-merge-patch+json" \
+          https://127.0.0.1:11000/api/v1/nodes/$(hostname) \
+          --data @/etc/debug.json || true
+    - path: /etc/sudoers.d/all
+      filesystem: root
+      mode: 0700
+      contents:
+        inline: |
+          ALL ALL=(ALL) NOPASSWD: ALL
+    - path: /opt/bin/consul-template
+      filesystem: root
+      mode: 0755
+      contents:
+        remote:
+          url: {{.assets_host}}/consul-template/consul-template-{{.consultemplate_version}}
+          verification:
+            hash:
+              function: sha512
+              sum: {{.consultemplate_sha512}}
+    - path: {{.k8s_scheduler_kubeconfig}}
+      filesystem: root
+      mode: 0755
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: Config
+          clusters:
+            - cluster:
+                certificate-authority: {{.k8s_cafile}}
+                server: https://127.0.0.1:{{.haproxy_port}}
+              name: {{.cluster_name}}
+          contexts:
+            - context:
+                cluster: {{.cluster_name}}
+                user: system:kube-scheduler:{{.controller_name}}
+              name: scheduler-to-api
+          current-context: scheduler-to-api
+          users:
+            - name: system:kube-scheduler:{{.controller_name}}
+              user:
+                client-certificate: {{.scheduler_crtfile}}
+                client-key: {{.scheduler_keyfile}}
+    - path: {{.k8s_controller_manager_kubeconfig}}
+      filesystem: root
+      mode: 0755
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: Config
+          clusters:
+            - cluster:
+                certificate-authority: {{.k8s_cafile}}
+                server: https://127.0.0.1:{{.haproxy_port}}
+              name: {{.cluster_name}}
+          contexts:
+            - context:
+                cluster: {{.cluster_name}}
+                user: system:kube-controller-manager:{{.controller_name}}
+              name: controller-manager-to-api
+          current-context: controller-manager-to-api
+          users:
+            - name: system:kube-controller-manager:{{.controller_name}}
+              user:
+                client-certificate: {{.controllerm_crtfile}}
+                client-key: {{.controllerm_keyfile}}
+    - path: {{.kubelet_kubeconfig}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: Config
+          clusters:
+          - name: {{.cluster_name}}
+            cluster:
+              certificate-authority: {{.k8s_cafile}}
+              server: https://127.0.0.1:{{.haproxy_port}}
+          users:
+          - name: 'kubelet'
+            user:
+              client-certificate: {{.kubelet_crtfile}}
+              client-key: {{.kubelet_keyfile}}
+          contexts:
+          - context:
+              cluster: {{.cluster_name}}
+              user: 'kubelet'
+            name: kubelet-context
+          current-context: kubelet-context
+    - path: /opt/bin/rocket-cleanup.sh
+      filesystem: root
+      mode: 0700
+      contents:
+        inline: |
+          #!/usr/bin/env bash
+          set -eu
+          # If we can't fetch the image the db is corrupted: https://github.com/rkt/rkt/issues/3843
+          # Wipe DB an restart kubelet
+          rm -f /var/lib/rkt/cas/db/ql.db
+    - path: {{.check_deploy_scriptlocation }}
+      filesystem: root
+      mode: 0700
+      contents:
+        inline: |
+          #!/usr/bin/env bash
+          set -eu
+          # Ensure we didn't miss anything
+          /opt/bin/start_deploy.sh $(ETCDCTL_API=2 etcdctl \
+            --endpoints={{.cmdb_url}} \
+            --username=$CMDB_USER:$CMDB_PASS \
+            get \
+            /inovex/k8s/clusters/$CLUSTERNAME/nodes/$NODEROLE/$(hostname)/deploy)
+
+          ETCDCTL_API=2 etcdctl \
+            --endpoints={{.cmdb_url}} \
+            --username=$CMDB_USER:$CMDB_PASS \
+            exec-watch \
+            /inovex/k8s/clusters/$CLUSTERNAME/nodes/$NODEROLE/$(hostname)/deploy -- bash -c '/opt/bin/start_deploy.sh ${ETCD_WATCH_VALUE}'
+    - path: /opt/bin/start_deploy.sh
+      filesystem: root
+      mode: 0700
+      contents:
+        inline: |
+          #!/usr/bin/env bash
+          set -eu
+          IS_DEPLOY=$1
+          MEMBER_ID=""
+
+          # For backward compability use "true"
+          if [[ $IS_DEPLOY == 'true' || $IS_DEPLOY == 'redeploy' ]];
+          then
+            systemctl stop etcd
+
+            COUNTER=1
+            while [ -z ${MEMBER_ID} ] && [[ ${COUNTER} -le 10 ]];
+            do
+              MEMBER_ID=$(etcdctl --endpoints={{.etcd_cluster}} --cert-file={{.etcd_crtfile}} --key-file={{.etcd_keyfile}} --ca-file={{.etcd_cafile}} member list | grep ${HOSTNAME} | awk -F: '{print $1}')
+              sleep 1
+              COUNTER=$[$COUNTER +1]
+            done
+
+            echo "Remove ${HOSTNAME} with member ID ${MEMBER_ID} from etcd cluster"
+            # If not possible ignore and restart (e.g. when the whole cluster gets redeployt)
+            COUNTER=1
+            until etcdctl --endpoints={{.etcd_cluster}} --cert-file={{.etcd_crtfile}} --key-file={{.etcd_keyfile}} --ca-file={{.etcd_cafile}} member remove ${MEMBER_ID};
+            do
+              sleep 1
+              if [[ ${COUNTER} -ge 10 ]];
+              then
+                break
+              fi
+              COUNTER=$[$COUNTER +1]
+            done
+
+            systemctl reboot
+          fi
+
+          if [[ $IS_DEPLOY != 'deployed' ]];
+          then
+            ETCDCTL_API=2 etcdctl \
+              --endpoints={{.cmdb_url}} \
+              --username=$CMDB_USER:$CMDB_PASS \
+              set /inovex/k8s/clusters/$CLUSTERNAME/nodes/$NODEROLE/$(hostname)/deploy "deployed"
+          fi
+    - path: {{.haproxy_configwriter_scriptlocation}}
+      filesystem: root
+      mode: 0755
+      contents:
+        inline: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HAPROXY_CONFIGFILE=/etc/haproxy.cfg
+
+          cat <<EOF >$HAPROXY_CONFIGFILE
+          global
+            log 127.0.0.1 local2
+
+          defaults
+            timeout connect 5000ms
+            timeout client 20000ms
+            timeout server 20000ms
+
+          listen stats
+            bind 127.0.0.1:1936
+            mode http
+            log global
+
+            maxconn 10
+            stats enable
+            stats hide-version
+            stats refresh 30s
+            stats show-node
+            stats uri /haproxy?stats
+
+          frontend api-in
+            bind 127.0.0.1:{{.haproxy_port}}
+            mode tcp
+            default_backend k8s-apiserver
+
+          backend k8s-apiserver
+            balance roundrobin
+            mode tcp
+            option tcp-check
+            option log-health-checks
+
+          EOF
+          for API_SERVER in {{.controller_ips}}; do
+            echo "  server $API_SERVER $API_SERVER:{{.k8s_api_server_port}} check-ssl verify required ca-file {{.k8s_cafile}} check" \
+              >> $HAPROXY_CONFIGFILE
+          done
+    - path: /opt/bin/start_etcd.sh
+      filesystem: root
+      mode: 0755
+      contents:
+        inline: |
+          #!/usr/bin/env bash
+          while [[ ! -f {{.etcd_crtfile}} || ! -f {{.etcd_keyfile}} || ! -f {{.etcd_cafile}} ]];
+          do
+            echo "Waiting for certificates to be generated"
+            sleep 1
+          done
+
+          ETCD_STATE=$(ETCDCTL_API=2 etcdctl \
+              --endpoints={{.cmdb_url}} \
+              --username=$CMDB_USER:$CMDB_PASS \
+              get /inovex/k8s/clusters/$CLUSTERNAME/nodes/master/$HOSTNAME/etcd_state)
+
+          echo "Attempting etcd start with initial state ${ETCD_STATE}"
+          if [[ ${ETCD_STATE} == "new" ]];
+          then
+            # Set the state to existing in the CMDB
+            ETCDCTL_API=2 etcdctl \
+              --endpoints={{.cmdb_url}} \
+              --username=$CMDB_USER:$CMDB_PASS \
+              set /inovex/k8s/clusters/$CLUSTERNAME/nodes/master/$HOSTNAME/etcd_state existing
+          else
+            COUNTER=1
+            while [ -z ${MEMBER_ID} ] && [[ ${COUNTER} -le 10 ]];
+            do
+              MEMBER_ID=$(etcdctl --endpoints={{.etcd_cluster}} --cert-file={{.etcd_crtfile}} --key-file={{.etcd_keyfile}} --ca-file={{.etcd_cafile}} member list | grep ${HOSTNAME} | awk -F: '{print $1}')
+              sleep 1
+              COUNTER=$[$COUNTER +1]
+            done
+
+            if [[ -z ${MEMBER_ID} ]];
+            then
+              # ensure clean state
+              rm -rf /var/lib/etcd
+              etcdctl --endpoints={{.etcd_cluster}} --cert-file={{.etcd_crtfile}} --key-file={{.etcd_keyfile}} --ca-file={{.etcd_cafile}} member add ${HOSTNAME}.{{.domain}} https://${HOSTNAME}.{{.domain}}:2380
+            fi
+          fi
+
+          exec /opt/bin/etcd \
+            --name=${HOSTNAME}.{{.domain}} \
+            --cert-file={{.etcd_crtfile}} \
+            --key-file={{.etcd_keyfile}} \
+            --peer-cert-file={{.etcd_crtfile}} \
+            --peer-key-file={{.etcd_keyfile}} \
+            --trusted-ca-file={{.etcd_cafile}} \
+            --peer-trusted-ca-file={{.etcd_cafile}} \
+            --initial-advertise-peer-urls=https://${HOSTNAME}.{{.domain}}:2380 \
+            --listen-peer-urls=https://0.0.0.0:2380 \
+            --listen-client-urls=https://0.0.0.0:2379 \
+            --advertise-client-urls=https://${HOSTNAME}.{{.domain}}:2379 \
+            --client-cert-auth \
+            --peer-client-cert-auth \
+            --initial-cluster-token={{.cluster_name}} \
+            --initial-cluster={{.etcd_initial_cluster}} \
+            --initial-cluster-state=${ETCD_STATE} \
+            --data-dir=/var/lib/etcd
+    - path: /etc/systemd/system.conf
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          [Manager]
+          JoinControllers=cpu,cpuacct,cpuset,net_cls,net_prio,hugetlb,memory
+    - path: /etc/systemd/system/docker.service.d/set-slice.conf
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          [Service]
+          Slice=kube.slice
+    - path: /var/log/audit/audit.log
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          ""
+    - path: /etc/kubernetes/manifests/haproxy.yml
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: haproxy
+            namespace: kube-system
+          spec:
+            hostNetwork: true
+            volumes:
+              - name: "etc-haproxy-cfg"
+                hostPath:
+                  path: "/etc/haproxy.cfg"
+              - name: "k8s-ca"
+                hostPath:
+                  path: "{{.k8s_cafile}}"
+            containers:
+              - name: "haproxy"
+                image: "haproxy:1.8.9-alpine"
+                resources:
+                  limits:
+                    cpu: "250m"
+                    memory: "256Mi"
+                  requests:
+                    cpu: "250m"
+                    memory: "256Mi"
+                volumeMounts:
+                  - mountPath: /usr/local/etc/haproxy/haproxy.cfg
+                    name: "etc-haproxy-cfg"
+                  - mountPath: {{.k8s_cafile}}
+                    name: "k8s-ca"
+    - path: /etc/kubernetes/audit-policy.yaml
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+          apiVersion: audit.k8s.io/v1beta1  #this is required in Kubernetes 1.8
+          kind: Policy
+          rules:
+            # Don't log watch requests by the "system:kube-proxy" on endpoints or services
+            - level: None
+              users: ["system:kube-proxy"]
+              verbs: ["watch"]
+              resources:
+              - group: "" # core API group
+                resources: ["endpoints", "services"]
+
+            - level: None
+              users: ["system:apiserver"]
+              verbs: ["get", "list"]
+              resources:
+              - group: "" # core API group
+                resources: ["endpoints", "services", "namespaces", "thirdpartyresources"]
+              - group: "extensions"
+                resources: ["thirdpartyresources"]
+              - group: "rbac.authorization.k8s.io"
+                resources: ["clusterrolebindings", "rolebindings", "clusterroles", "roles"]
+
+            # Don't log authenticated requests to certain non-resource URL paths.
+            - level: None
+              userGroups: ["system:authenticated"]
+              nonResourceURLs:
+              - "/api*" # Wildcard matching.
+              - "/version"
+              - "/metrics"
+
+            # Don't log unauthenticated requests to certain non-resource URL paths.
+            - level: None
+              userGroups: ["system:unauthenticated"]
+              nonResourceURLs:
+              - "/apis"
+              - "/metrics"
+
+            - level: None
+              userGroups: ["system:serviceaccounts"]
+              verbs: ["get", "list", "watch"]
+              resources:
+              - group: "" # core API group
+                resources: ["pods", "nodes", "services", "endpoints"]
+
+            - level: None
+              users: ["system:serviceaccount:kube-system:calico-node"]
+              verbs: ["get", "list", "watch"]
+              resources:
+              - group: "" # core API group
+                resources: ["pods", "nodes", "services", "endpoints", "namespaces"]
+              - group: "projectcalico.org" # core API group
+                resources: ["ippools", "globalbgpconfigs", "globalbgppeers", "globalconfigs"]
+              - group: "alpha.projectcalico.org" # core API group
+                resources: ["systemnetworkpolicies"]
+              - group: "extensions"
+                resources: ["networkpolicies"]
+
+            # Log the request body of configmap changes in kube-system.
+            - level: Request
+              resources:
+              - group: "" # core API group
+                resources: ["configmaps"]
+              # This rule only applies to resources in the "kube-system" namespace.
+              # The empty string "" can be used to select non-namespaced resources.
+              namespaces: ["kube-system"]
+
+            # Log configmap and secret changes in all other namespaces at the Metadata level.
+            - level: Metadata
+              resources:
+              - group: "" # core API group
+                resources: ["secrets", "configmaps"]
+
+            # Log all other resources in core and extensions at the Request level.
+            - level: Request
+              resources:
+              - group: "" # core API group
+              - group: "extensions" # Version of group should NOT be included.
+
+            # A catch-all rule to log all other requests at the Metadata level.
+            - level: Metadata
+networkd:
+  units:
+    - name: 00-eth0.network
+      contents: |
+        [Match]
+        Name=eth0
+        [Link]
+        MTUBytes={{.mtu}}
+        # Disable ipv6 to allow a mtu smaller than 1280
+        # Refernce: https://www.freedesktop.org/software/systemd/man/systemd.network.html#MTUBytes=
+        [Network]
+        DHCP=ipv4
+        LinkLocalAddressing=no
+        IPv6AcceptRA=no
+docker:
+  flags:
+    - --exec-opt=native.cgroupdriver=cgroupfs
+    - --cgroup-parent=container.slice
+    - --bip="192.168.122.33/27"
+locksmith:
+  reboot_strategy: off
+passwd:
+  users:
+    - name: core
+      ssh_authorized_keys:
+        - ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEA6NF8iallvQVp22WDkTkyrtvp9eWW6A8YVr+kz4TjGYe7gHzIw+niNltGEFHzD8+v1I2YJ6oXevct1YeS0o9HZyN1Q9qgCgzUFtdOKLv6IedplqoPkcmF0aYet2PkEDo3MlTBckFXPITAMzF8dJSIFo9D8HfdOV0IAdx4O7PtixWKn5y2hMNG0zQPyUecp4pzC6kivAIhyfHilFR61RGL+GPXQ2MWZWFYbAGjyiYJnAmCP3NOTd0jMZEnDkbUvxhMmBYSdETk1rRgm+R4LOzFUGaHqHDLKLX+FIPKcF96hrucXzcWyLbIbEgE98OHlnVYCzRdK8jlqm8tehUc9c9WhQ== vagrant insecure public key

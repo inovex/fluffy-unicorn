@@ -1,0 +1,90 @@
+#!/bin/bash
+set -eou pipefail
+
+DEST=${1:-"/var/lib/matchbox/assets"}
+ETCD_CREDENTIALS=${2:-"root:rootpw"}
+ETCD_URL=${3:-"http://192.168.0.254:2379"}
+TMP=$(mktemp -p $DEST -d)
+trap "rm -rf $TMP" EXIT INT TERM
+
+get_value() {
+    curl --fail -s -XGET -u "$ETCD_CREDENTIALS" "$ETCD_URL/v2/keys$1"
+}
+
+check_checksum() {
+    value=$1
+    expected=$2
+    msg=$3
+    if [ "$value" != "$expected" ]; then
+        echo "Invalid checksum for $msg"
+        echo "Expected: $expected"
+        echo "Received: $value"
+        exit 1
+    fi
+}
+
+get_k8s() {
+    k8s_version=$1
+    mkdir -p $TMP/k8s
+    K8S_DOWNLOAD_URL=https://storage.googleapis.com/kubernetes-release/release
+    for component in kubectl kube-proxy kube-scheduler kube-apiserver kube-controller-manager; do
+        curl --fail -s -o $TMP/k8s/${component}-${k8s_version} \
+              ${K8S_DOWNLOAD_URL}/v${k8s_version}/bin/linux/amd64/${component}
+    done
+
+    mkdir -p $DEST/k8s
+    mv $TMP/k8s/* $DEST/k8s
+}
+
+get_etcd() {
+    etcd_version=$1
+    etcd_sha512=$2
+    mkdir -p $TMP/etcd
+    curl --fail -s -o $TMP/etcd/etcd.tar.gz \
+         https://storage.googleapis.com/etcd/v${etcd_version}/etcd-v${etcd_version}-linux-amd64.tar.gz
+    tar xf $TMP/etcd/etcd.tar.gz -C $TMP/etcd --strip-components=1
+
+    d_sha512=$(cat $TMP/etcd/etcd $TMP/etcd/etcdctl | sha512sum | awk '{print $1}')
+    check_checksum $d_sha512 $etcd_sha512 "etcd $etcd_version"
+
+    mkdir -p $DEST/etcd
+    mv $TMP/etcd/etcd $DEST/etcd/etcd-$etcd_version
+    mv $TMP/etcd/etcdctl $DEST/etcd/etcdctl-$etcd_version
+}
+
+get_consul_template() {
+    ct_version=$1
+    ct_sha512=$2
+    mkdir -p $TMP/ct
+    curl --fail -s -o $TMP/ct/ct.tar.gz \
+         https://releases.hashicorp.com/consul-template/${ct_version}/consul-template_${ct_version}_linux_amd64.tgz
+    tar xf $TMP/ct/ct.tar.gz -C  $TMP/ct
+
+    d_sha512=$(sha512sum $TMP/ct/consul-template | awk '{print $1}')
+    check_checksum $d_sha512 $ct_sha512 "consul-template $ct_version"
+
+    mkdir -p $DEST/consul-template
+    mv $TMP/ct/consul-template $DEST/consul-template/consul-template-${ct_version}
+}
+
+CLUSTERS=$(get_value "/inovex/k8s/clusters/?recursive=true" | jq -r .node.nodes[].key)
+for cluster in $CLUSTERS; do
+    echo $cluster
+    k8s_version=$(get_value "$cluster/defaults/kubernetes_version" | jq -r .node.value)
+    etcd_version=$(get_value "$cluster/defaults/etcd_version" | jq -r .node.value)
+    etcd_sha512=$(get_value "$cluster/defaults/etcd_sha_512" | jq -r .node.value)
+    ct_version=$(get_value "$cluster/defaults/consul_template_version" | jq -r .node.value)
+    ct_sha512=$(get_value "$cluster/defaults/consul_template_sha_512" | jq -r .node.value)
+
+    if [ ! -e $DEST/k8s/kubectl-${k8s_version} ]; then
+        get_k8s $k8s_version
+    fi
+
+    if [ ! -e $DEST/etcd/etcd-$etcd_version ]; then
+        get_etcd $etcd_version $etcd_sha512
+    fi
+
+    if [ ! -e $DEST/consul-template/consul-template-$ct_version ]; then
+        get_consul_template $ct_version $ct_sha512
+    fi
+done

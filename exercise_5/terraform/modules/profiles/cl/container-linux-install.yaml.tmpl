@@ -1,0 +1,146 @@
+---
+systemd:
+  units:
+    - name: update-ca-certificates.path
+      enable: true
+      contents: |
+        [Path]
+        PathChanged=/etc/ssl/certs
+        [Install]
+        WantedBy=multi-user.target
+    - name: update-ca-certificates.service
+      contents: |
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/sbin/update-ca-certificates
+    - name: installer.service
+      enable: true
+      contents: |
+        [Unit]
+        Requires=network-online.target
+        After=network-online.target
+        [Service]
+        EnvironmentFile=-{{.consultemplate_vault_token_file}}
+        EnvironmentFile=-{{.consultemplate_cmdbcreds_rendered}}
+        Type=simple
+        ExecStartPre=/opt/bin/vault_token_fetcher {{.consultemplate_vault_token_file}}
+        ExecStartPre=/opt/bin/consul-template \
+          -once \
+          -config={{.consultemplate_config}}
+        ExecStart=/opt/installer
+
+        Restart=on-failure
+        RestartSec=60
+        [Install]
+        WantedBy=multi-user.target
+storage:
+  files:
+    - path: {{.consultemplate_config}}
+      filesystem: root
+      mode: 0600
+      contents:
+        inline: |
+         vault {
+           address = "{{.vault_url}}"
+            ssl {
+              enabled = {{.vault_tls_enabled}}
+            }
+          }
+         template {
+           source = "{{.consultemplate_cmdbcreds_template}}"
+           destination = "{{.consultemplate_cmdbcreds_rendered}}"
+           # Required to not have matchbox interpolate
+           left_delimiter  = "[["
+           right_delimiter = "]]"
+         }
+    - path: {{.consultemplate_cmdbcreds_template}}
+      filesystem: root
+      mode: 0644
+      contents:
+        inline: |
+          [[- with secret "/inovex/k8s/global/{{.cluster_name}}/all/cmdb" -]]
+          CMDB_USER='[[ .Data.user ]]'
+          CMDB_PASS='[[ .Data.pass ]]'[[ end ]]
+    - path: /opt/bin/consul-template
+      filesystem: root
+      mode: 0755
+      contents:
+        remote:
+          url: {{.assets_host}}/consul-template/consul-template-{{.consultemplate_version}}
+          verification:
+            hash:
+              function: sha512
+              sum: {{.consultemplate_sha512}}
+    - path: /opt/bin/vault_token_fetcher
+      filesystem: root
+      mode: 0700
+      user:
+        id: 0
+      contents:
+        inline: |
+          #!/usr/bin/env bash
+          set -e
+          TOKEN=$(curl -Ss {{.vault_url}}/v1/auth/inovex/approle/login \
+            -XPOST --data "{\"role_id\": \"{{.vault_approle_id}}\"}" \
+              |jq -r .auth.client_token)
+
+          if [[ -n $1 ]]; then
+            mkdir -p $(dirname $1)
+            # Ensure file exists, so the ch{own,mod} doesn't fail
+            touch $1
+            # This is pretty sensitive, so ensure owner and permissions
+            chown root $1
+            chmod 0600 $1
+            echo "VAULT_TOKEN=$TOKEN" > $1
+          else
+            echo -n $TOKEN
+          fi
+    - path: /opt/installer
+      filesystem: root
+      mode: 0500
+      contents:
+        inline: |
+          #!/bin/bash -eux
+          # Block until host got hostname via dhcp
+          # network-online.target is not sufficient
+          # for that
+          until [[ "$(hostname)" != 'localhost' ]]; do sleep 1; done
+
+          NODENAME=$(hostname)
+          CLUSTERNAME={{.cluster_name}}
+          NODETYPE=$(hostname|cut -d'-' -f1|tail -c +2)
+
+          ETCDCTL_API=2 etcdctl \
+            --endpoints={{.cmdb_url}} \
+            --username=$CMDB_USER:$CMDB_PASS \
+            set /inovex/k8s/clusters/$CLUSTERNAME/nodes/$NODETYPE/$NODENAME/deploy deployed
+
+          ETCDCTL_API=2 etcdctl \
+            --endpoints={{.cmdb_url}} \
+            --username=$CMDB_USER:$CMDB_PASS \
+            set /inovex/k8s/clusters/$CLUSTERNAME/nodes/$NODETYPE/$NODENAME/debug false
+
+          # Set last_deployed flag
+          ETCDCTL_API=2 etcdctl \
+            --endpoints={{.cmdb_url}} \
+            --username=$CMDB_USER:$CMDB_PASS \
+            set /inovex/k8s/clusters/$CLUSTERNAME/nodes/$NODETYPE/$NODENAME/last_deployed $(date -u +%s)
+
+          wipefs -a -f {{.install_disk}}
+
+          curl --retry 10 "{{.ignition_endpoint}}?{{.request.raw_query}}&os=installed" -o ignition.json
+          coreos-install \
+            -d {{.install_disk}} \
+            -C {{.container_linux_channel}} \
+            -V {{.container_linux_version}} \
+            {{.baseurl_flag}} \
+            -i ignition.json
+          udevadm settle
+          systemctl reboot
+locksmith:
+  reboot_strategy: off
+passwd:
+  users:
+    - name: core
+      ssh_authorized_keys:
+        - ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEA6NF8iallvQVp22WDkTkyrtvp9eWW6A8YVr+kz4TjGYe7gHzIw+niNltGEFHzD8+v1I2YJ6oXevct1YeS0o9HZyN1Q9qgCgzUFtdOKLv6IedplqoPkcmF0aYet2PkEDo3MlTBckFXPITAMzF8dJSIFo9D8HfdOV0IAdx4O7PtixWKn5y2hMNG0zQPyUecp4pzC6kivAIhyfHilFR61RGL+GPXQ2MWZWFYbAGjyiYJnAmCP3NOTd0jMZEnDkbUvxhMmBYSdETk1rRgm+R4LOzFUGaHqHDLKLX+FIPKcF96hrucXzcWyLbIbEgE98OHlnVYCzRdK8jlqm8tehUc9c9WhQ== vagrant insecure public key

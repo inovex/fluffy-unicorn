@@ -1,0 +1,52 @@
+---
+# In a perfect world this comes from your asset-mgmt/Cloud provider
+inovex:
+  k8s:
+    clusters:
+      fluffy-unicorn-ka:
+        nodes:
+          master:
+            kmaster-fluffy-unicorn-ka-001:
+              mac: "52:54:00:fb:53:a6"
+              ip_address: "192.168.1.2"
+              rack_id: "rack1"
+              etcd_state: "new"
+              deploy: "initial"
+              debug: "false"
+              last_deployed: "0"
+              last_seen: "0"
+            # kmaster-fluffy-unicorn-ka-002:
+            #   mac: "52:54:00:fb:53:a7"
+            #   ip_address: "192.168.1.3"
+            #   rack_id: "rack2"
+            #   etcd_state: "new"
+            #   deploy: "initial"
+            #   debug: "false"
+            #   last_deployed: "0"
+            #   last_seen: "0"
+            # kmaster-fluffy-unicorn-ka-003:
+            #   mac: "52:54:00:fb:53:a8"
+            #   ip_address: "192.168.1.4"
+            #   rack_id: "rack3"
+            #   etcd_state: "new"
+            #   deploy: "initial"
+            #   debug: "false"
+            #   last_deployed: "0"
+            #   last_seen: "0"
+          worker:
+            kworker-fluffy-unicorn-ka-001:
+              mac: "52:54:00:fb:53:a9"
+              ip_address: "192.168.1.100"
+              rack_id: "rack1"
+              deploy: "initial"
+              debug: "false"
+              last_deployed: "0"
+              last_seen: "0"
+            # kworker-fluffy-unicorn-ka-002:
+            #   mac: "52:54:00:fb:01:a9"
+            #   ip_address: "192.168.1.101"
+            #   rack_id: "rack2"
+            #   deploy: "initial"
+            #   debug: "false"
+            #   last_deployed: "0"
+            #   last_seen: "0"

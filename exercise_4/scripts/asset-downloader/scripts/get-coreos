@@ -1,0 +1,70 @@
+#!/bin/bash
+# USAGE: ./scripts/get-coreos
+# USAGE: ./scripts/get-coreos channel version dest
+#
+# ENV VARS:
+# - OEM_ID - specify OEM image id to download, alongside the default one
+set -eou pipefail
+
+GPG=${GPG:-/usr/bin/gpg}
+
+CHANNEL=${1:-"stable"}
+VERSION=${2:-"1409.7.0"}
+DEST_DIR=${3:-"$PWD/examples/assets"}
+OEM_ID=${OEM_ID:-""}
+DEST=$DEST_DIR/coreos/$VERSION
+BASE_URL=https://$CHANNEL.release.core-os.net/amd64-usr/$VERSION
+UPDATE_URL=https://update.release.core-os.net/amd64-usr/$VERSION/update.gz
+export GNUPGHOME="$DEST_DIR/coreos"
+mkdir -p "$GNUPGHOME"
+chmod 700 "$GNUPGHOME"
+
+# check channel/version exist based on the header response
+if ! curl -s -I $BASE_URL/coreos_production_pxe.vmlinuz | grep -q -E '^HTTP/[0-9.]+ [23][0-9][0-9]' ; then
+  echo "Channel or Version not found"
+  exit 1
+fi
+
+if [ ! -d "$DEST" ]; then
+  echo "Creating directory $DEST"
+  mkdir -p $DEST
+fi
+
+if [[ -n "${OEM_ID}" ]]; then
+  IMAGE_NAME="coreos_production_${OEM_ID}_image.bin.bz2"
+
+  # check if the oem version exists based on the header response
+  if ! curl -s -I $BASE_URL/$IMAGE_NAME | grep -q -E '^HTTP/[0-9.]+ [23][0-9][0-9]' ; then
+    echo "OEM version not found"
+    exit 1
+  fi
+fi
+
+echo "Downloading CoreOS $CHANNEL $VERSION images and sigs to $DEST"
+
+if [ ! -e $DEST/CoreOS_Image_Signing_Key.asc ]; then
+    echo "CoreOS Image Signing Key"
+    curl -s https://coreos.com/security/image-signing-key/CoreOS_Image_Signing_Key.asc -o $DEST/CoreOS_Image_Signing_Key.asc
+    $GPG --import < "$DEST/CoreOS_Image_Signing_Key.asc" || true
+fi
+
+to_download="coreos_production_pxe.vmlinuz coreos_production_pxe_image.cpio.gz coreos_production_image.bin.bz2"
+if [[ -n "${IMAGE_NAME-}" ]]; then
+    to_download="$to_download $IMAGE_NAME"
+fi
+
+for f in $to_download; do
+    if [ -e $DEST/$f ]; then
+        echo "Skipping already downloaded $f"
+        continue
+    fi
+    echo "$f.sig..."
+    curl -s $BASE_URL/$f.sig -o $DEST/$f.sig
+    echo "$f..."
+    curl -s $BASE_URL/$f -o $DEST/$f
+    if ! $GPG --verify $DEST/$f.sig; then
+        rm -f $DEST/$f
+        echo "Signature verify of $DEST/$f failed"
+        exit 1
+    fi
+done

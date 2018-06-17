@@ -1,0 +1,7 @@
+[template]
+src = "clusters.tf.tmpl"
+dest = "/etc/terraform/clusters.tf"
+keys = ["/clusters"]
+# Ugly but required to cover the initial case: All files have to be there before
+# reload_cmd will succeeed
+reload_cmd = "(cd /etc/terraform && terraform plan && terraform apply) || true "

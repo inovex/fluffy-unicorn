@@ -1,0 +1,6 @@
+.vagrant
+.env
+ca.pem
+crt.pem
+key.pem
+.kube

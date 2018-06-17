@@ -1,0 +1,85 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+# backwards compatibility). Please don't change it unless you know what
+# you're doing.
+#Read all nodes from the asset dump
+require 'yaml'
+
+assets = YAML.load_file('./data/fluffy-unicorn-ka-assets.yaml')
+
+boxes = []
+for master in assets['inovex']['k8s']['clusters']['fluffy-unicorn-ka']['nodes']['master']
+  boxes.insert(-1, {
+    :name => master[0],
+    :mac => master[1]['mac'],
+    :network => 'pxe_network'
+  })
+end
+
+for worker in assets['inovex']['k8s']['clusters']['fluffy-unicorn-ka']['nodes']['worker']
+  boxes.insert(-1, {
+    :name => worker[0],
+    :mac => worker[1]['mac'],
+    :network => 'pxe_network'
+  })
+end
+
+Vagrant.configure(2) do |config|
+  boxes.each do |box|
+    config.vm.define box[:name] do |config|
+      #config.vm.box = "coreos-stable"
+      #config.vm.box_url = "https://stable.release.core-os.net/amd64-usr/current/coreos_production_vagrant_virtualbox.json"
+      config.vm.box = "debian/jessie64"
+      config.vm.box_version = "8.10.0" #"9.4.0"
+
+      config.vm.synced_folder '.', '/vagrant', disabled: true
+      config.ssh.insert_key = false
+      config.ssh.username = 'core'
+      config.ssh.forward_agent = true
+      config.vm.boot_timeout = 1
+
+      config.vm.provider :libvirt do |lv|
+        boot_network = {'network' => box[:network]}
+        lv.boot boot_network
+        lv.random :model => 'random'
+        lv.storage :file, :size => '10G', :type => 'qcow2', :bus => 'virtio'
+        lv.memory = "1280"
+        lv.keymap = "de"
+        lv.mgmt_attach = false
+
+        # libvirt.boot 'network'
+        # libvirt.mgmt_attach = 'false'
+        # libvirt.management_network_name = "pxe_network"
+        # libvirt.management_network_address = "192.168.0.0/24"
+        # libvirt.management_network_mode = "nat"
+      end
+
+      config.vm.provider :virtualbox do |vb|
+        vb.memory = "1280"
+        vb.cpus = "1"
+        vb.gui = false
+        vb.check_guest_additions = false
+        vb.functional_vboxsf     = false
+        config.vm.base_mac = box[:mac].gsub(':', '')
+        vb.customize [
+          'modifyvm', :id,
+          '--nic1', 'intnet',
+          '--intnet1', box[:network],
+          '--boot1', 'net',
+          '--boot2', 'none',
+          '--boot3', 'none',
+          '--boot4', 'none'
+        ]
+
+      end
+       #
+       # config.vm.network "public_network", auto_config: false
+       #
+       # config.vm.network "private_network",
+       #                   libvirt__network_name: box[:network],
+       #                   libvirt__dhcp_enabled: false,
+       #                   mac: box[:mac].gsub(':', ''),
+       #                   virtualbox__intnet: box[:network]
+    end
+  end
+end

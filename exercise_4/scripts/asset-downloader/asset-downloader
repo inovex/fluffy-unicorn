@@ -1,0 +1,77 @@
+#!/bin/bash
+set -eou pipefail
+
+BRANCH="${BRANCH:-stable}"
+MATCHBOX_ASSETS_DIR="${MATCHBOX_ASSETS_DIR:-/var/lib/matchbox/assets}"
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+GET_COREOS="${GET_COREOS:-${SCRIPT_DIR}/scripts/get-coreos}"
+GET_ASSETS="${GET_ASSETS:-${SCRIPT_DIR}/scripts/get-assets}"
+LAST_N_RELEASES=${LAST_N_RELEASES:--1}
+MAX_RELEASES=${MAX_RELEASES:-40}
+ETCD_URL=${ETCD_URL:-"http://192.168.0.254:2379"}
+ETCD_CREDENTIALS=${ETCD_CREDENTIALS:-"root:rootpw"}
+
+
+if [ $LAST_N_RELEASES -gt $MAX_RELEASES ]; then
+    MAX_RELEASES=$LAST_N_RELEASES
+fi
+
+getRequired() {
+    CLUSTERS=$(curl --fail -Ss -XGET -u "$ETCD_CREDENTIALS" "$ETCD_URL/v2/keys/inovex/k8s/clusters/?recursive=true" | jq -r .node.nodes[].key)
+    for cluster in $CLUSTERS; do
+        # This will only work for a single cluster
+        cl_version=$(curl --fail -Ss -XGET -L -u "$ETCD_CREDENTIALS" "$ETCD_URL/v2/keys/$cluster/defaults/container_linux_version" | jq -r .node.value)
+    done
+
+    if [[ "$cl_version" == "null" ]];
+    then
+      return
+    fi
+
+    echo "$cl_version"
+}
+
+getReleases() {
+    if [[ "${LAST_N_RELEASES}" == "-1" ]]; then
+      curl -sL "https://coreos.com/releases/releases-$BRANCH.json" | jq -r 'keys[]' | sort -V
+    else
+      curl -sL "https://coreos.com/releases/releases-$BRANCH.json" | jq -r 'keys[]' | sort -V | tail -n "${LAST_N_RELEASES}"
+    fi
+}
+
+getDownloadedReleases() {
+    if [[ ! -d "$MATCHBOX_ASSETS_DIR/coreos" ]]; then
+      echo ""
+      return 0
+    fi
+    if [[ "${LAST_N_RELEASES}" == "-1" ]]; then
+      find "$MATCHBOX_ASSETS_DIR/coreos" -type d -name '*\.*\.*' -exec basename {} \; | sort -V
+    else
+      find "$MATCHBOX_ASSETS_DIR/coreos" -type d -name '*\.*\.*' -exec basename {} \; | sort -V | tail -n "${LAST_N_RELEASES}"
+    fi
+}
+
+echo "Fetch releases for Container Linux"
+RELEASES="$(getReleases)"
+echo "Fetch required releases from etcd"
+REQUIRED="$(getRequired)"
+
+echo "=> Deleting old releases"
+for delete in $(LAST_N_RELEASES=-1 getDownloadedReleases | head -n -$MAX_RELEASES); do
+    echo $REQUIRED | grep -q $delete && continue
+    echo "deleting $delete"
+    rm -rf "$MATCHBOX_ASSETS_DIR/coreos/$delete"
+done
+
+# add required releases
+RELEASES=$(echo "$RELEASES $REQUIRED" | sed -e "s/ /\n/g" | sort -u)
+
+echo "-> Starting download(s) (branch: $BRANCH)..."
+for version in $RELEASES; do
+    echo "--> Downloading version: $version"
+    "$GET_COREOS" "$BRANCH" "$version" "$MATCHBOX_ASSETS_DIR"
+    echo "==> Downloaded version: $version"
+done
+
+echo "-> Downloading extra assets"
+"$GET_ASSETS" "$MATCHBOX_ASSETS_DIR" "$ETCD_CREDENTIALS" "$ETCD_URL"
