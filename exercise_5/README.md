@@ -52,22 +52,6 @@ ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i insecure_priv
 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i insecure_private_key core@192.168.1.100
 ```
 
-## Deploy kube-proxy and networking
-
-In order to get a fully functioning cluster we need to deploy `kube-proxy` and a [networking solution](https://kubernetes.io/docs/concepts/cluster-administration/networking/#how-to-implement-the-kubernetes-networking-model) in our case we will deploy [Calico](https://docs.projectcalico.org/v3.1/introduction). The Kubernetes configuration files can be found on `./kube-deploy` and can be applied with: `kubectl apply -f kube-deploy/kube-proxy` and `kubectl apply -f kube-deploy/calico`.
-
-## On the master node
-
-If you are on the master node you can read the content of the etcd "cluster" with the following content:
-
-```bash
-sudo ETCDCTL_API=3 etcdctl --cacert="/etc/etcd/ca.pem" --key="/etc/etcd/key.pem" --cert="/etc/etcd/crt.pem" get --prefix=true /registry
-```
-
-## Clean up
-
-In order to clean everything up: `make clean`
-
 ## Install Gitlab
 
 You can find the complete instructions for installing gitlab [on Debian](https://about.gitlab.com/installation/#debian) and installing a [Gitlab runner](https://docs.gitlab.com/runner/install/linux-repository.html) on the Matchbox (as `Docker executor`)
@@ -80,5 +64,10 @@ Create a new Project in Gitlab and push all the code into it. Now write a [gitla
 - `terraform_config`
 - `etcd_data`
 - `confd_config`
+- Add an additional step `redeploy cluster` and `update cluster`
 
 Additionally you can also deploy `kube-proxy` and `calico` as part of a Gitlab Job. Also feel free to add any other job / Kubernetes deployment that you think could be useful.
+
+## Clean up
+
+In order to clean everything up: `make clean`
