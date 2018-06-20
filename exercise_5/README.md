@@ -9,6 +9,7 @@ The configuration for our machines is stored in two yaml files under `./data` no
 ## Starting Matchbox
 
 ```bash
+make env-file
 make pxe_server
 ```
 

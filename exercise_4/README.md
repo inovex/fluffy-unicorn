@@ -6,9 +6,22 @@ Additionally we will start an [etcd](https://coreos.com/etcd/) "cluster" on the 
 
 The configuration for our machines is stored in two yaml files under `./data` normally these information would be stored in your asset management tool.
 
+## Where to look at
+
+In the following folders you can find important configurations:
+
+- `./data` this contains the "assets" and cluster definition. This file will be imported into the "CMDB" etcd
+- `./confd/dhcpd` this contains the confd configuration for the DHCP server
+- `./confd/terraform` this contains the confd configuration which is needed to render the `cluster.tf`.
+- `./terraform/modules` contains the `kubernetes` and `profile` modules for deploying Kubernetes
+- `./terraform/modules/kubernetes` contains the groups and profile terraform templates to create a Kubernetes cluster the groups will reference to the profiles in `./terraform/modules/profiles`
+- `./terraform/modules/profiles` this folder contains all configuration needed to deploy the actual nodes (e.g. master oder worker node)
+- `kube-deploy` contains Kubernetes descriptors for calico and kube_proxy
+
 ## Starting Matchbox
 
 ```bash
+make env-file
 make pxe_server
 ```
 

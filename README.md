@@ -6,6 +6,7 @@
 - Make (tested: `GNU Make 3.81`)
 - VirtualBox (tested: `5.2.12`)
 - Docker (tested: `18.03.1-ce-mac65`)
+- On MacOS use the `coreutils` (<https://www.topbug.net/blog/2013/04/14/install-and-use-gnu-command-line-tools-in-mac-os-x/>)
 
 All the exercises are tested on MacOS.
 

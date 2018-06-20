@@ -5,6 +5,7 @@ In this exercise we will start a Debian VM which acts as the [Matchbox](https://
 ## Starting Matchbox
 
 ```bash
+make env-file
 make pxe_server
 ```
 

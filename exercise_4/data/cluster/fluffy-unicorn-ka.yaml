@@ -4,7 +4,7 @@ inovex:
     clusters:
       fluffy-unicorn-ka:
         defaults:
-          kubernetes_version: "1.10.3"
+          kubernetes_version: "1.10.2"
           etcd_version: "3.2.13"
           etcd_sha_512: "07b6021c258d72530b9b35e2be113af31a46f7d754ac19fb70f68a6d860d1f8c763746f312e1e5f64c118d117a0c51ace0f1ea0935f274a85784da954a4ddd47"
           consul_template_version: "0.19.4"
@@ -34,24 +34,3 @@ inovex:
           # Disable vault tls
           # Don't do this in  production :)
           vault_tls_enabled: false
-          addons:
-            calico:
-              version: "v2.6"
-            kube_dns:
-              version: "1.14.7"
-            rbac_defaults:
-              version: "0.1"
-            node_exporter:
-              version: "v0.14.0"
-            kube-proxy:
-              version: "1.8"
-            prometheus:
-              version: "v1.8"
-            fluentd:
-              version: "v0.2.2"
-            kube-state-metrics:
-              version: "v1.1.0"
-            ssl-file-exporter:
-              version: "0.0.7"
-            pod-security-policies:
-              version: "v0.0.1"

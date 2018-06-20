@@ -7,6 +7,7 @@ Additionally we will start an [etcd](https://coreos.com/etcd/) "cluster" on the 
 ## Starting Matchbox
 
 ```bash
+make env-file
 make pxe_server
 ```
 
