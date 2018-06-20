@@ -1,5 +1,9 @@
 # Fluffy Unicorn (Kubernetes on bare-metal Workshop)
 
+If you find any bugs or improvements feel free to create an issue or fix it and create an merge request.
+
+Happy learning!
+
 ## Requirements
 
 - Vagrant (tested: `2.1.1`)
