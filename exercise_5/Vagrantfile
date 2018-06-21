@@ -10,6 +10,7 @@ Vagrant.configure(2) do |config|
       config.vm.box = "debian/jessie64" # "debian/stretch64"
       config.vm.box_version = "8.10.0" #"9.4.0"
       config.vm.synced_folder '.', '/vagrant', disabled: true
+      config.vm.synced_folder 'assets/', '/var/lib/matchbox/assets', disabled: true
       config.ssh.insert_key = false
 
       config.vm.provision "shell", path: "scripts/matchbox_server.sh"
