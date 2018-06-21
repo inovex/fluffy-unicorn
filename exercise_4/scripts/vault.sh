@@ -72,15 +72,6 @@ then
                 generate_lease='true'
 
   docker exec vault \
-    vault write /inovex/fluffy-unicorn-ka-k8s/roles/kubeproxy \
-                allow_any_name='true' \
-                enforce_hostnames='false' \
-                organization='' \
-                max_ttl="${VAULT_CERT_TTL}" \
-                allow_ip_sans='true' \
-                generate_lease='true'
-
-  docker exec vault \
     vault write /inovex/fluffy-unicorn-ka-etcd/roles/etcd \
                 allowed_domains="${ZONE}" \
                 allow_bare_domains='false' \
@@ -107,8 +98,6 @@ then
     $POLICYDIR/fluffy-unicorn-ka_k8s_master_issue
   echo echo path \\\"/inovex/fluffy-unicorn-ka-k8s/issue/kubelet\\\" {policy=\\\"write\\\"}\|vault policy-write fluffy-unicorn-ka_k8s_kubelet_issue - > \
     $POLICYDIR/fluffy-unicorn-ka_k8s_kubelet_issue
-  echo echo path \\\"/inovex/fluffy-unicorn-ka-k8s/issue/kubeproxy\\\" {policy=\\\"write\\\"}\|vault policy-write fluffy-unicorn-ka_k8s_kubeproxy_issue - > \
-    $POLICYDIR/fluffy-unicorn-ka_k8s_kubeproxy_issue
   echo echo path \\\"/inovex/fluffy-unicorn-ka-k8s/issue/gitlab-serviceuser\\\" {policy=\\\"write\\\"}\|vault policy-write fluffy-unicorn-ka_k8s_gitlab_serviceuser_issue - > \
     $POLICYDIR/fluffy-unicorn-ka_k8s_gitlab_serviceuser_issue
   echo 'for file in $(ls /policies/*_issue); do sh $file; done' > $POLICYDIR/create_policies
@@ -117,12 +106,12 @@ then
   # Create approleids
   docker exec vault vault write /auth/inovex/approle/role/fluffy-unicorn-ka_master \
     bind_secret_id=false \
-    policies=fluffy-unicorn-ka_read_all,fluffy-unicorn-ka_etcd_issue,fluffy-unicorn-ka_k8s_master_issue,fluffy-unicorn-ka_k8s_kubelet_issue,fluffy-unicorn-ka_k8s_kubeproxy_issue,fluffy-unicorn-ka_read_master \
+    policies=fluffy-unicorn-ka_read_all,fluffy-unicorn-ka_etcd_issue,fluffy-unicorn-ka_k8s_master_issue,fluffy-unicorn-ka_k8s_kubelet_issue,fluffy-unicorn-ka_read_master \
     bound_cidr_list=192.168.0.0/16
 
   docker exec vault vault write /auth/inovex/approle/role/fluffy-unicorn-ka_worker \
     bind_secret_id=false \
-    policies=fluffy-unicorn-ka_read_all,fluffy-unicorn-ka_k8s_kubelet_issue,fluffy-unicorn-ka_k8s_kubeproxy_issue \
+    policies=fluffy-unicorn-ka_read_all,fluffy-unicorn-ka_k8s_kubelet_issue \
     bound_cidr_list=192.168.0.0/16
 
   docker exec vault vault write /auth/inovex/approle/role/fluffy-unicorn-ka_addon_deployment \

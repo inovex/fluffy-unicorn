@@ -17,3 +17,7 @@ All the exercises are tested on MacOS.
 ## Exercises
 
 Inside each folder there is an exercise matching the Workshop slides. Each exercise builts on the Knowledge of the exercise before (except for `exercise 1` :)) but can be used independently.
+
+## Slides
+
+Can be found here: <https://www.inovex.de/fileadmin/files/Vortraege/2018/manage-your-bare-metal-infrastructure-with-ci-cd-driven-approach-containerdays-2018.pdf?utm_source=Twitter&utm_medium=Post&utm_campaign=Vortrag%20ContainerDays%202018&utm_content=Bare%20metal%20infrastructure%20Johannes%20Scheuermann>
